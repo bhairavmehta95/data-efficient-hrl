@@ -11,8 +11,6 @@ import torch.nn.functional as F
 import hiro.utils as utils
 import hiro.hiro as hiro
 
-from envs import ParticleEnv
-
 # Runs policy for X episodes and returns average reward
 def evaluate_policy(env, writer, manager_policy, controller_policy, calculate_controller_reward, 
     ctrl_rew_scale, manager_propose_frequency=10, eval_idx=0, eval_episodes=5
@@ -25,29 +23,23 @@ def evaluate_policy(env, writer, manager_policy, controller_policy, calculate_co
         avg_step_count = 0
         global_steps = 0
         for eval_ep in range(eval_episodes):
-            obs, s, goalobs, g = env.reset()
-            z = controller_policy.get_encoding(obs)
+            obs = env.reset()
+
+            goal = obs['desired_goal']
+            state = obs['observation']
+
             done = False
             step_count = 0
             env_goals_achieved = 0
 
-            recon = controller_policy.get_reconstruction(obs)
-            goalrecon = controller_policy.get_reconstruction(goalobs)
-
-            if eval_ep == 0:
-                writer.add_image('eval_images/original', obs, eval_idx * eval_episodes + eval_ep)
-                writer.add_image('eval_images/goal', goalobs, eval_idx * eval_episodes + eval_ep)
-                writer.add_image('eval_images/reconstructed', recon, eval_idx * eval_episodes + eval_ep)
-                writer.add_image('eval_images/goal_reconstructed', goalrecon, eval_idx * eval_episodes + eval_ep)
-
             while not done:
                 if step_count % manager_propose_frequency == 0:
-                    subgoal = manager_policy.sample_goal(obs, goalobs)
+                    subgoal = manager_policy.sample_goal(state, goal)
 
                 step_count += 1
                 global_steps += 1
-                action = controller_policy.select_action(obs, subgoal)
-                obstup, reward, done, _ = env.full_step(action)
+                action = controller_policy.select_action(state, subgoal)
+                obs, reward, done, _ = env.step(action)
 
                 # See if the environment goal was achieved
                 if done: env_goals_achieved += 1
@@ -55,13 +47,11 @@ def evaluate_policy(env, writer, manager_policy, controller_policy, calculate_co
                 if step_count + 1 == env.max_steps:
                     done = True
 
-                obs = obstup[0]
-                # Update subgoal
-                next_z = controller_policy.get_encoding(obs)
-                subgoal = controller_policy.subgoal_transition(z, subgoal, next_z)
-                controller_rew = calculate_controller_reward(z, subgoal, next_z, ctrl_rew_scale)
+                goal = obs['desired_goal']
+                state = obs['observation']
 
-                z = next_z
+                # Update subgoal
+                subgoal = controller_policy.subgoal_transition(state, subgoal, next_state)
 
                 avg_reward += reward
                 avg_controller_rew += controller_rew
@@ -93,24 +83,20 @@ def run_hiro(args):
     if not os.path.exists(os.path.join(args.log_dir, args.log_file)):
         os.makedirs(os.path.join(args.log_dir, args.log_file))
 
-    args.vae_dir = os.path.join(args.vae_dir, args.log_file)
-    if not os.path.exists(args.vae_dir):
-        os.makedirs(args.vae_dir)
-    
     env = gym.make(args.env_name)
     obs = env.reset()
 
     goal = obs['desired_goal']
     state = obs['observation']
 
-    # Write Hyperparameters to file
-    print("---------------------------------------")
-    print("Current Arguments:")
-    with open(os.path.join(args.log_dir, args.log_file, "hps.txt"), 'w') as f:
-        for arg in vars(args):
-            print("{}: {}".format(arg, getattr(args, arg)))
-            f.write("{}: {}\n".format(arg, getattr(args, arg)))
-    print("---------------------------------------\n")
+    # # Write Hyperparameters to file
+    # print("---------------------------------------")
+    # print("Current Arguments:")
+    # with open(os.path.join(args.log_dir, args.log_file, "hps.txt"), 'w') as f:
+    #     for arg in vars(args):
+    #         print("{}: {}".format(arg, getattr(args, arg)))
+    #         f.write("{}: {}\n".format(arg, getattr(args, arg)))
+    # print("---------------------------------------\n")
 
     writer = SummaryWriter(log_dir=os.path.join(args.log_dir, args.log_file))
     torch.cuda.set_device(0)
@@ -123,7 +109,8 @@ def run_hiro(args):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    state_dim = s.shape[0]
+    state_dim = state.shape[0]
+    goal_dim = goal.shape[0]
     action_dim = env.action_space.shape[0]
 
     max_action = int(env.action_space.high[0])
@@ -131,18 +118,18 @@ def run_hiro(args):
     # Initialize policy, replay buffers
     controller_policy = hiro.Controller(
         state_dim=state_dim,
+        goal_dim=state_dim,
         action_dim=action_dim,
         max_action=max_action,
         actor_lr=args.ctrl_act_lr,
         critic_lr=args.ctrl_crit_lr,
-        vae_lr=args.vae_lr,
-        vae_beta1=args.vae_beta1,
-        vae_beta2=args.vae_beta2,
         ctrl_rew_type=args.ctrl_rew_type
     )
 
     manager_policy = hiro.Manager(
         state_dim=state_dim,
+        goal_dim=goal_dim,
+        action_dim=state_dim,
         actor_lr=args.man_act_lr,
         critic_lr=args.man_crit_lr,
         candidate_goals=args.candidate_goals
@@ -152,7 +139,7 @@ def run_hiro(args):
 
     if args.noise_type == "ou":
         man_noise = utils.OUNoise(state_dim, sigma=args.man_noise_sigma)
-        ctrl_noise = utils.OUNoise(state_dim, sigma=args.ctrl_noise_sigma)
+        ctrl_noise = utils.OUNoise(action_dim, sigma=args.ctrl_noise_sigma)
 
     elif args.noise_type == "normal":
         man_noise = utils.NormalNoise(sigma=args.man_noise_sigma)
@@ -164,50 +151,35 @@ def run_hiro(args):
     # Logging Parameters
     total_timesteps = 0
     timesteps_since_eval = 0
-    timesteps_since_vae = 0
     timesteps_since_manager = 0
     timesteps_since_subgoal = 0
     episode_num = 0
     done = True
     evaluations = []
 
-
     while total_timesteps < args.max_timesteps:
         if done:
             if total_timesteps != 0:
                 print('Training Controller...')
-                ctrl_act_loss, ctrl_crit_loss, avg_mu, avg_logvar = controller_policy.train(controller_buffer, episode_timesteps,
+                ctrl_act_loss, ctrl_crit_loss = controller_policy.train(controller_buffer, episode_timesteps,
                     args.ctrl_batch_size, args.discount, args.ctrl_tau)
 
                 writer.add_scalar('data/controller_actor_loss', ctrl_act_loss, total_timesteps)
                 writer.add_scalar('data/controller_critic_loss', ctrl_crit_loss, total_timesteps)
 
                 writer.add_scalar('data/controller_ep_rew', episode_reward, total_timesteps)
-                writer.add_scalar('data/manager_ep_rew', manager_transition[-5], total_timesteps)
+                writer.add_scalar('data/manager_ep_rew', manager_transition[4], total_timesteps)
 
                 # Train Manager
                 if timesteps_since_manager >= args.train_manager_freq:
                     print('Training Manager...')
-                    
-                    # Set to evaluation mode for batchnorm
-                    manager_policy.set_train()
-                
+
                     timesteps_since_manager = 0
-                    man_act_loss, man_crit_loss, sg_orig, sg = manager_policy.train(controller_policy, 
+                    man_act_loss, man_crit_loss  = manager_policy.train(controller_policy, 
                         manager_buffer, ceil(episode_timesteps / args.train_manager_freq) , args.man_batch_size, args.discount, args.man_tau)
 
                     writer.add_scalar('data/manager_actor_loss', man_act_loss, total_timesteps)
                     writer.add_scalar('data/manager_critic_loss', man_crit_loss, total_timesteps)
-                    writer.add_scalar('debug/num_minibatches_manager', ceil(episode_timesteps / args.train_manager_freq), total_timesteps)
-                    
-                    if total_timesteps % args.train_manager_freq * 10 == 0:
-                        writer.add_image('images/manager_original_sg', sg_orig, total_timesteps)
-                        writer.add_image('images/manager_correct_sg', sg, total_timesteps)
-                        writer.add_image('images/goal', goalobs, total_timesteps)
-                        writer.add_image('images/current', obs, total_timesteps)
-
-                    # Reset to training mode for batchnorm
-                    manager_policy.set_eval()
 
                 # Evaluate episode
                 if timesteps_since_eval >= args.eval_freq:
@@ -281,7 +253,7 @@ def run_hiro(args):
         subgoal = controller_policy.subgoal_transition(state, subgoal, next_state)
 
         # Is the episode over?
-        if env_done or episode_timesteps + 1 == env.max_steps:
+        if env_done:
             done = True
 
         episode_reward += controller_reward
@@ -296,15 +268,14 @@ def run_hiro(args):
         )
 
         # Update state parameters
-        obs = next_obs
         state = next_state
+        goal = next_goal
 
         # Update counters
         episode_timesteps += 1
         total_timesteps += 1
         timesteps_since_eval += 1
         timesteps_since_manager += 1
-        timesteps_since_vae += 1
         timesteps_since_subgoal += 1
 
         if timesteps_since_subgoal % args.manager_propose_freq == 0:

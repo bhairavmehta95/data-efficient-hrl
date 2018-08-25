@@ -48,7 +48,7 @@ class Critic(nn.Module):
 class ControllerActor(nn.Module):
     def __init__(self, state_dim, goal_dim, action_dim, max_action=1):
         super(ControllerActor, self).__init__()
-        self.actor = Actor(state_dim, goal_dim, action_dim, max_action)
+        self.actor = Actor(state_dim, goal_dim, action_dim, 1)
     
     def forward(self, x, sg):
         return self.actor(x, sg)
@@ -64,10 +64,10 @@ class ControllerCritic(nn.Module):
         return self.critic(x, sg, u)
 
 class ManagerActor(nn.Module):
-    def __init__(self, state_dim, goal_dim, action_dim, max_action=np.inf):
+    def __init__(self, state_dim, goal_dim, action_dim, max_action=1):
         super(ManagerActor, self).__init__()
         # TODO: what is the max action
-        self.actor = Actor(state_dim, goal_dim, action_dim, max_action)
+        self.actor = Actor(state_dim, goal_dim, action_dim, 1)
     
     def forward(self, x, g):
         return self.actor(x, g)

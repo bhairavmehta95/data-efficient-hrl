@@ -11,7 +11,6 @@ from os.path import join, exists
 from os import makedirs
 
 from hiro.models import ControllerActor, ControllerCritic, ManagerActor, ManagerCritic
-from hiro.utils import ObservationBuffer
 
 
 totensor = transforms.Compose([transforms.ToPILImage(), transforms.ToTensor()])
@@ -64,29 +63,30 @@ class Manager(object):
         self.actor_target.set_train()
 
     def sample_goal(self, state, goal, to_numpy=True):
-        obs = get_tensor(obs)
+        state = get_tensor(state)
         goal = get_tensor(goal)
 
         if to_numpy:
-            return self.actor(obs, goal).cpu().data.numpy().squeeze()
+            return self.actor(state, goal).cpu().data.numpy().squeeze()
         else:
-            return self.actor(obs, goal).squeeze()
+            return self.actor(state, goal).squeeze()
 
     def value_estimate(self, state, goal, subgoal):
-        state = get_tensor(state)
-        goal = get_tensor(goal)
-        subgoal = get_tensor(subgoal)
+        state = state
+        goal = goal
+        subgoal = subgoal
 
         return self.critic(state, goal, subgoal)
 
     def actor_loss(self, state, goal):
-        state = get_tensor(state)
-        goal = get_tensor(goal)
+        state = state
+        goal = goal
 
         return -self.critic(state, goal, self.actor(state, goal)).mean()
 
     def off_policy_corrections(self, controller_policy, batch_size, subgoals, x_seq, a_seq):
         # TODO: Doesn't include subgoal transitions!!
+        return subgoals
 
         new_subgoals = np.copy(subgoals)
         
@@ -183,7 +183,7 @@ class Manager(object):
             for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
                 target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
 
-        return avg_act_loss / iterations, avg_crit_loss / iterations, original_sg_recon, new_sg_recon
+        return avg_act_loss / iterations, avg_crit_loss / iterations
 
     def load_pretrained_weights(self, filename):
         state = torch.load(filename)
@@ -202,8 +202,7 @@ class Manager(object):
 
 class Controller(object):
     def __init__(self, state_dim, goal_dim,
-        action_dim, max_action, actor_lr, critic_lr,
-        vae_lr, vae_beta1, vae_beta2, ctrl_rew_type
+        action_dim, max_action, actor_lr, critic_lr, ctrl_rew_type
     ):
         self.actor = ControllerActor(state_dim, goal_dim, action_dim)
         self.actor_target = ControllerActor(state_dim, goal_dim, action_dim)
@@ -216,9 +215,6 @@ class Controller(object):
         self.critic_target.load_state_dict(self.critic.state_dict())
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(),
             lr=critic_lr)
-
-        self.get_action_z = self.actor.get_action_z
-        self.get_reparameterized_encoding = self.actor.get_reparameterized_encoding
 
         self.subgoal_transition = self.hiro_subgoal_transition
 
@@ -263,7 +259,7 @@ class Controller(object):
         batch_size=100, discount=0.99, tau=0.005):
 
         avg_act_loss, avg_crit_loss = 0., 0.
-        avg_mu, avg_logvar = None, None
+
         for it in range(iterations):
             # Sample replay buffer
             x, y, sg, u, r, d, _, _ = replay_buffer.sample(batch_size)
@@ -272,13 +268,6 @@ class Controller(object):
             next_state = y
             done = get_tensor(1 - d)
             reward =  get_tensor(r)
-
-            if avg_mu is not None:
-                avg_mu += mu
-                avg_logvar += logvar
-            else:
-                avg_mu = mu
-                avg_logvar = logvar
 
             next_g = get_tensor(self.subgoal_transition(state, sg, next_state))
 
@@ -301,7 +290,7 @@ class Controller(object):
             self.critic_optimizer.step()
 
             # Compute actor loss
-            actor_loss = self.actor_loss(state, obs, sg)
+            actor_loss = self.actor_loss(state, sg)
 
             # Optimize the actor
             self.actor_optimizer.zero_grad()
@@ -318,7 +307,7 @@ class Controller(object):
             for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
                 target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
 
-        return avg_act_loss / iterations, avg_crit_loss / iterations, avg_mu / iterations, avg_logvar / iterations
+        return avg_act_loss / iterations, avg_crit_loss / iterations 
 
     def save(self, filename, directory):
         torch.save(self.actor.state_dict(), '%s/%s_ControllerActor.pth' % (directory, filename))

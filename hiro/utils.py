@@ -54,9 +54,9 @@ class ReplayBuffer(object):
             x_seq.append(np.array(obs_seq, copy=False))
             a_seq.append(np.array(acts, copy=False))
         
-        return np.array(x), np.array(y), np.array(g), 
+        return np.array(x), np.array(y), np.array(g), \
             np.array(u), np.array(r).reshape(-1, 1), np.array(d).reshape(-1, 1), \
-            xobs_seq, a_seq
+            x_seq, a_seq
 
 
 class NormalNoise(object):
