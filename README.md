@@ -1,2 +1,2 @@
 # hiro-data-efficient
-Implementation of HIRO
+Implementation of HIRO in Pytorch

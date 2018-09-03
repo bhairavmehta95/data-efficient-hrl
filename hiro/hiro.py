@@ -122,7 +122,8 @@ class Manager(object):
         for c in range(ncands):
             policy_actions[c] = controller_policy.select_action(observations, batched_candidates[c])
 
-        difference = policy_actions - true_actions
+        difference = (policy_actions - true_actions)
+        difference = np.where(difference != -np.inf, difference, 0)
         difference = difference.reshape((ncands, batch_size, seq_len) + action_dim).transpose(1, 0, 2, 3)
 
         logprob = -0.5*np.sum(np.linalg.norm(difference, axis=-1)**2, axis=-1)
