@@ -8,7 +8,7 @@ parser.add_argument("--seed", default=0, type=int)                      # Sets G
 parser.add_argument("--eval_freq", default=5e3, type=float)             # How often (time steps) we evaluate
 parser.add_argument("--max_timesteps", default=1e6, type=float)         # Max time steps to run environment for
 parser.add_argument("--save_models", action="store_true")               # Whether or not models are saved
-parser.add_argument("--env_name", default="FetchReach-v1", type=str)         # Environment name
+parser.add_argument("--env_name", default="FetchReach-v1", type=str)    # Environment name
 parser.add_argument("--log_dir", default="logs/", type=str)             # Where logs are saved
 parser.add_argument("--log_file", default="hiro", type=str)             # Where logs are saved
 parser.add_argument("--random_params", action="store_true")             # Run HP search
@@ -19,17 +19,17 @@ parser.add_argument("--train_manager_freq", default=10, type=int)       # #of en
 parser.add_argument("--discount", default=0.99, type=float)             # Discount factor
 
 # Manager Parameters
-parser.add_argument("--man_tau", default=0.001, type=float)              # Manager Target network update rate
+parser.add_argument("--man_tau", default=0.001, type=float)             # Manager Target network update rate
 parser.add_argument("--man_batch_size", default=128, type=int)          # Batch size for both actor and critic
 parser.add_argument("--man_buffer_size", default=2e6, type=int)         # Replay Buffer size
 parser.add_argument("--man_rew_scale", default=0.1, type=float)         # Reward Scaling
 parser.add_argument("--man_act_lr", default=1e-4, type=float)           # Actor Learning Rate
 parser.add_argument("--man_crit_lr", default=1e-3, type=float)          # Critic Learning Rate
-parser.add_argument("--man_last_layer", default="fc", type=str)          # Critic Learning Rate
-parser.add_argument("--candidate_goals", default=3, type=int)          # Critic Learning Rate
+parser.add_argument("--man_last_layer", default="fc", type=str)         # Critic Learning Rate
+parser.add_argument("--candidate_goals", default=3, type=int)           # Critic Learning Rate
 
 # Controller Parameters
-parser.add_argument("--ctrl_tau", default=0.001, type=float)             # Controller Target network update rate
+parser.add_argument("--ctrl_tau", default=0.001, type=float)            # Controller Target network update rate
 parser.add_argument("--ctrl_batch_size", default=128, type=int)         # Batch size for both actor and critic
 parser.add_argument("--ctrl_buffer_size", default=2e6, type=int)        # Replay Buffer size
 parser.add_argument("--ctrl_rew_scale", default=1.0, type=float)        # Reward Scaling
@@ -38,9 +38,9 @@ parser.add_argument("--ctrl_act_lr", default=1e-4, type=float)          # Actor 
 parser.add_argument("--ctrl_crit_lr", default=1e-3, type=float)         # Critic Learning Rate
 
 # Noise Parameters
-parser.add_argument("--noise_type", default="normal", type=str)
-parser.add_argument("--ctrl_noise_sigma", default=0.1, type=float)               # Std of Gaussian exploration noise
-parser.add_argument("--man_noise_sigma", default=0.25, type=float)               # Std of Gaussian exploration noise
+parser.add_argument("--noise_type", default="normal", type=str)         # Type of exploration noise
+parser.add_argument("--ctrl_noise_sigma", default=0.1, type=float)      # Std of Gaussian exploration noise
+parser.add_argument("--man_noise_sigma", default=0.25, type=float)      # Std of Gaussian exploration noise
 
 # Run the algorithm
 args = parser.parse_args()

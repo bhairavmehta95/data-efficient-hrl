@@ -12,15 +12,16 @@ from os import makedirs
 
 from hiro.models import ControllerActor, ControllerCritic, ManagerActor, ManagerCritic
 
-
 totensor = transforms.Compose([transforms.ToPILImage(), transforms.ToTensor()])
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 def var(tensor):
     if torch.cuda.is_available():
-        return Variable(tensor).cuda()
+        return tensor.cuda()
     else:
-        return Variable(tensor)
+        return tensor
+
 
 def get_tensor(z):
     if len(z.shape) == 1:
@@ -28,21 +29,19 @@ def get_tensor(z):
     else:
         return var(torch.FloatTensor(z.copy()))
 
+
 class Manager(object):
-    def __init__(self, state_dim, goal_dim,
-        action_dim, actor_lr, critic_lr, candidate_goals):
+    def __init__(self, state_dim, goal_dim, action_dim, actor_lr, critic_lr, candidate_goals):
         self.actor = ManagerActor(state_dim, goal_dim, action_dim)
         self.actor_target = ManagerActor(state_dim, goal_dim, action_dim)
         self.actor_target.load_state_dict(self.actor.state_dict())
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(),
-            lr=actor_lr)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
 
         self.critic = ManagerCritic(state_dim, goal_dim, action_dim)
         self.critic_target = ManagerCritic(state_dim, goal_dim, action_dim)
 
         self.critic_target.load_state_dict(self.critic.state_dict())
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(),
-            lr=critic_lr)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
 
         if torch.cuda.is_available():
             self.actor = self.actor.cuda()
@@ -82,13 +81,13 @@ class Manager(object):
         state = state
         goal = goal
 
-        return -self.critic(state, goal, self.actor(state, goal)).mean()
+        return -self.critic.Q1(state, goal, self.actor(state, goal)).mean()
 
     def off_policy_corrections(self, controller_policy, batch_size, subgoals, x_seq, a_seq):
         # TODO: Doesn't include subgoal transitions!!
-        return subgoals
+        # return subgoals
 
-        new_subgoals = np.copy(subgoals)
+        # new_subgoals = controller_policy.multi_subgoal_transition(x_seq, subgoals)
         
         first_x = [x[0] for x in x_seq] # First x
         last_x = [x[-1] for x in x_seq] # Last x
@@ -99,6 +98,7 @@ class Manager(object):
 
         # Shape: (batchsz, 10, subgoal_dim)
         candidates = np.concatenate([original_goal, diff_goal, random_goals], axis=1)
+
 
         x_seq = np.array(x_seq)[:, :-1, :]
         a_seq = np.array(a_seq)
@@ -112,15 +112,17 @@ class Manager(object):
 
         true_actions = a_seq.reshape((new_batch_sz,) + action_dim)
         observations = x_seq.reshape((new_batch_sz,) + obs_dim)
-        observations = get_obs_tensor(observations, sg_corrections=True)
+        # observations = get_obs_tensor(observations, sg_corrections=True)
 
-        batched_candidates = np.tile(candidates, [seq_len, 1, 1])
-        batched_candidates = batched_candidates.transpose(1, 0, 2)
+        # batched_candidates = np.tile(candidates, [seq_len, 1, 1])
+        # batched_candidates = batched_candidates.transpose(1, 0, 2)
 
         policy_actions = np.zeros((ncands, new_batch_sz) + action_dim)
 
         for c in range(ncands):
-            policy_actions[c] = controller_policy.select_action(observations, batched_candidates[c])
+            candidate = controller_policy.multi_subgoal_transition(x_seq, candidates[:, c])
+            candidate = candidate.reshape(new_batch_sz, *obs_dim)
+            policy_actions[c] = controller_policy.select_action(observations, candidate)
 
         difference = (policy_actions - true_actions)
         difference = np.where(difference != -np.inf, difference, 0)
@@ -130,10 +132,9 @@ class Manager(object):
         max_indices = np.argmax(logprob, axis=-1)
 
         return candidates[np.arange(batch_size), max_indices]
-        
 
     def train(self, controller_policy, replay_buffer, iterations, 
-        batch_size=100, discount=0.99, tau=0.005):
+              batch_size=100, discount=0.99, tau=0.005):
         avg_act_loss, avg_crit_loss = 0., 0.
         for it in range(iterations):
             # Sample replay buffer
@@ -149,17 +150,17 @@ class Manager(object):
             done = get_tensor(1 - d)
 
             # Q target = reward + discount * Q(next_state, pi(next_state))
-            target_Q = self.critic_target(next_state, goal, \
-                self.actor_target(next_state, goal))
+            target_Q1, target_Q2 = self.critic_target(next_state, goal, self.actor_target(next_state, goal))
 
+            target_Q = torch.min(target_Q1, target_Q2)
             target_Q = reward + (done * discount * target_Q)
             target_Q_no_grad = target_Q.detach()
 
             # Get current Q estimate
-            current_Q = self.value_estimate(state, goal, subgoal)
+            current_Q1, current_Q2 = self.value_estimate(state, goal, subgoal)
 
             # Compute critic loss
-            critic_loss = self.criterion(current_Q, target_Q_no_grad)
+            critic_loss = self.criterion(current_Q1, target_Q_no_grad) + self.criterion(current_Q2, target_Q_no_grad)
 
             # Optimize the critic
             self.critic_optimizer.zero_grad()
@@ -251,10 +252,14 @@ class Controller(object):
         state = get_tensor(state)
         sg = get_tensor(sg)
 
-        return -self.critic(state, sg, self.actor(state, sg)).mean()
+        return -self.critic.Q1(state, sg, self.actor(state, sg)).mean()
 
     def hiro_subgoal_transition(self, state, subgoal, next_state):
         return state + subgoal - next_state
+
+    def multi_subgoal_transition(self, states, subgoal):
+        subgoals = (subgoal + states[:, 0])[:, None] - states
+        return subgoals
 
     def train(self, replay_buffer, iterations,
         batch_size=100, discount=0.99, tau=0.005):
@@ -268,22 +273,22 @@ class Controller(object):
             action = u
             next_state = y
             done = get_tensor(1 - d)
-            reward =  get_tensor(r)
+            reward = get_tensor(r)
 
             next_g = get_tensor(self.subgoal_transition(state, sg, next_state))
 
             # Q target = reward + discount * Q(next_state, pi(next_state))
-            target_Q = self.critic_target(get_tensor(next_state), 
-                next_g, self.actor_target(get_tensor(next_state), next_g))
-
+            target_Q1, target_Q2 = self.critic_target(get_tensor(next_state), next_g,
+                                          self.actor_target(get_tensor(next_state), next_g))
+            target_Q = torch.min(target_Q1, target_Q2)
             target_Q = reward + (done * discount * target_Q)
             target_Q_no_grad = target_Q.detach()
 
             # Get current Q estimate
-            current_Q = self.value_estimate(state, sg, action)
+            current_Q1, current_Q2 = self.value_estimate(state, sg, action)
 
             # Compute critic loss
-            critic_loss = self.criterion(current_Q, target_Q_no_grad)
+            critic_loss = self.criterion(current_Q1, target_Q_no_grad) + self.criterion(current_Q2, target_Q_no_grad)
 
             # Optimize the critic
             self.critic_optimizer.zero_grad()

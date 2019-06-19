@@ -6,14 +6,17 @@ import gym
 
 from tensorboardX import SummaryWriter
 
+from scipy.special import huber
+
 import torch.nn.functional as F
 
 import hiro.utils as utils
 import hiro.hiro as hiro
 
+
 # Runs policy for X episodes and returns average reward
 def evaluate_policy(env, writer, manager_policy, controller_policy, calculate_controller_reward, 
-    ctrl_rew_scale, manager_propose_frequency=10, eval_idx=0, eval_episodes=5
+                    ctrl_rew_scale, manager_propose_frequency=10, eval_idx=0, eval_episodes=5
     ):
     print("Starting evaluation number {}...".format(eval_idx))
 
@@ -39,22 +42,24 @@ def evaluate_policy(env, writer, manager_policy, controller_policy, calculate_co
                 step_count += 1
                 global_steps += 1
                 action = controller_policy.select_action(state, subgoal)
-                obs, reward, done, _ = env.step(action)
+                new_obs, reward, done, _ = env.step(action)
 
                 # See if the environment goal was achieved
                 if done: env_goals_achieved += 1
 
-                if step_count + 1 == env.max_steps:
+                if step_count + 1 == 1000:
                     done = True
 
-                goal = obs['desired_goal']
-                state = obs['observation']
+                goal = new_obs['desired_goal']
+                new_state = new_obs['observation']
 
                 # Update subgoal
-                subgoal = controller_policy.subgoal_transition(state, subgoal, next_state)
+                subgoal = controller_policy.subgoal_transition(state, subgoal, new_state)
 
                 avg_reward += reward
-                avg_controller_rew += controller_rew
+                avg_controller_rew += calculate_controller_reward(state, subgoal, new_state, ctrl_rew_scale)
+
+                state = new_state
 
             avg_step_count += step_count
 
@@ -70,8 +75,11 @@ def evaluate_policy(env, writer, manager_policy, controller_policy, calculate_co
 
         return avg_reward, avg_controller_rew, avg_step_count, avg_env_finish
 
+
 def hiro_controller_reward(z, subgoal, next_z, scale):
-    return -1 * np.linalg.norm(z + subgoal - next_z) * scale
+    reward = -np.linalg.norm(z + subgoal - next_z, axis=-1) * scale
+    return reward
+
 
 def run_hiro(args):
     if not os.path.exists("./results"):
@@ -98,7 +106,7 @@ def run_hiro(args):
     #         f.write("{}: {}\n".format(arg, getattr(args, arg)))
     # print("---------------------------------------\n")
 
-    writer = SummaryWriter(log_dir=os.path.join(args.log_dir, args.log_file))
+    writer = SummaryWriter(logdir=os.path.join(args.log_dir, args.log_file))
     torch.cuda.set_device(0)
 
     env_name = type(env).__name__
@@ -162,7 +170,8 @@ def run_hiro(args):
             if total_timesteps != 0:
                 print('Training Controller...')
                 ctrl_act_loss, ctrl_crit_loss = controller_policy.train(controller_buffer, episode_timesteps,
-                    args.ctrl_batch_size, args.discount, args.ctrl_tau)
+                                                                        args.ctrl_batch_size, args.discount,
+                                                                        args.ctrl_tau)
 
                 writer.add_scalar('data/controller_actor_loss', ctrl_act_loss, total_timesteps)
                 writer.add_scalar('data/controller_critic_loss', ctrl_crit_loss, total_timesteps)
@@ -175,8 +184,9 @@ def run_hiro(args):
                     print('Training Manager...')
 
                     timesteps_since_manager = 0
-                    man_act_loss, man_crit_loss  = manager_policy.train(controller_policy, 
-                        manager_buffer, ceil(episode_timesteps / args.train_manager_freq) , args.man_batch_size, args.discount, args.man_tau)
+                    man_act_loss, man_crit_loss = manager_policy.train(controller_policy, manager_buffer,
+                                                                       ceil(episode_timesteps/args.train_manager_freq),
+                                                                       args.man_batch_size, args.discount, args.man_tau)
 
                     writer.add_scalar('data/manager_actor_loss', man_act_loss, total_timesteps)
                     writer.add_scalar('data/manager_critic_loss', man_crit_loss, total_timesteps)
@@ -184,7 +194,9 @@ def run_hiro(args):
                 # Evaluate episode
                 if timesteps_since_eval >= args.eval_freq:
                     timesteps_since_eval = 0
-                    avg_ep_rew, avg_controller_rew, avg_steps, avg_env_finish = evaluate_policy(env, writer, manager_policy, controller_policy, calculate_controller_reward, args.ctrl_rew_scale, args.manager_propose_freq, len(evaluations))
+                    avg_ep_rew, avg_controller_rew, avg_steps, avg_env_finish =\
+                        evaluate_policy(env, writer, manager_policy, controller_policy, calculate_controller_reward,
+                                        args.ctrl_rew_scale, args.manager_propose_freq, len(evaluations))
 
                     writer.add_scalar('eval/avg_ep_rew', avg_ep_rew, total_timesteps)
                     writer.add_scalar('eval/avg_controller_rew', avg_controller_rew, total_timesteps)
@@ -197,7 +209,7 @@ def run_hiro(args):
                         controller_policy.save(file_name+'_controller', directory="./pytorch_models")
                         manager_policy.save(file_name+'_manager', directory="./pytorch_models")
 
-                    np.save("./results/%s" % (file_name), evaluations)
+                    np.save("./results/%s" % file_name, evaluations)
 
                 # Process final state/obs, store manager transition, if it was not just created
                 if len(manager_transition[-2]) != 1:                    
@@ -241,14 +253,16 @@ def run_hiro(args):
         manager_transition[4] += manager_reward * args.man_rew_scale
 
         # Process
-        next_goal = obs['desired_goal']
-        next_state = obs['observation']
+        next_goal = next_tup['desired_goal']
+        next_state = next_tup['observation']
 
         # Append low level sequence for off policy correction
         manager_transition[-1].append(action)
         manager_transition[-2].append(next_state)
 
         # Calculate reward, transition subgoal
+        # print(np.sum(np.abs(state - next_state)), subgoal)
+
         controller_reward = calculate_controller_reward(state, subgoal, next_state, args.ctrl_rew_scale)
         subgoal = controller_policy.subgoal_transition(state, subgoal, next_state)
 
@@ -260,11 +274,7 @@ def run_hiro(args):
 
         # Store low level transition
         controller_buffer.add(
-            (
-                state, next_state, subgoal, \
-                action, controller_reward, float(done), \
-                [], []
-            )
+            (state, next_state, subgoal, action, controller_reward, float(done), [], [])
         )
 
         # Update state parameters
@@ -294,11 +304,10 @@ def run_hiro(args):
             # Create a high level transition
             manager_transition = [state, None, goal, subgoal, 0, False, [state], []]
 
-
     # Final evaluation
     evaluations.append([evaluate_policy(env, writer, manager_policy, controller_policy,
-        calculate_controller_reward, args.ctrl_rew_scale, 
-        args.manager_propose_freq, len(evaluations))])
+                                        calculate_controller_reward, args.ctrl_rew_scale,
+                                        args.manager_propose_freq, len(evaluations))])
 
     if args.save_models:
         controller_policy.save(file_name+'_controller', directory="./pytorch_models")
