@@ -2,6 +2,7 @@ import numpy as np
 
 import torch
 from torchvision import transforms
+import pickle as pkl
 
 from os import listdir
 from os.path import join, isdir
@@ -14,35 +15,36 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def var(tensor):
     if torch.cuda.is_available():
-        return Variable(tensor).cuda()
+        return tensor.cuda()
     else:
-        return Variable(tensor)
+        return tensor
 
 
 # Simple replay buffer
 class ReplayBuffer(object):
     def __init__(self, maxsize=1e6, batch_size=100):
-        self.storage = []
+        self.storage = [[] for _ in range(8)]
         self.maxsize = maxsize
         self.next_idx = 0
         self.batch_size = batch_size
 
     # Expects tuples of (x, x', g, u, r, d, x_seq, a_seq)
     def add(self, data):
-        if self.next_idx >= len(self.storage):
-            self.storage.append(data)
+        self.next_idx = int(self.next_idx)
+        if self.next_idx >= len(self.storage[0]):
+            [array.append(datapoint) for array, datapoint in zip(self.storage, data)]
         else:
-            self.storage[self.next_idx] = data
+            [array.__setitem__(self.next_idx, datapoint) for array, datapoint in zip(self.storage, data)]
 
         self.next_idx = (self.next_idx + 1) % self.maxsize
 
     def sample(self, batch_size):
-        ind = np.random.randint(0, len(self.storage), size=batch_size)
+        ind = np.random.randint(0, len(self.storage[0]), size=batch_size)
 
         x, y, g, u, r, d, x_seq, a_seq = [], [], [], [], [], [], [], []          
 
         for i in ind: 
-            X, Y, G, U, R, D, obs_seq, acts = self.storage[i]
+            X, Y, G, U, R, D, obs_seq, acts = (array[i] for array in self.storage)
             x.append(np.array(X, copy=False))
             y.append(np.array(Y, copy=False))
             g.append(np.array(G, copy=False))
@@ -58,6 +60,18 @@ class ReplayBuffer(object):
             np.array(u), np.array(r).reshape(-1, 1), np.array(d).reshape(-1, 1), \
             x_seq, a_seq
 
+    def save(self, file):
+        np.savez_compressed(file, idx=np.array([self.next_idx]), x=self.storage[0],
+                            y=self.storage[1], g=self.storage[2], u=self.storage[3],
+                            r=self.storage[4], d=self.storage[5], xseq=self.storage[6],
+                            aseq=self.storage[7])
+
+    def load(self, file):
+        with np.load(file) as data:
+            self.next_idx = int(data["idx"][0])
+            self.storage = [data["x"], data["y"], data["g"], data["u"], data["r"],
+                            data["d"], data["xseq"], data["aseq"]]
+            self.storage = [list(l) for l in self.storage]
 
 class NormalNoise(object):
     def __init__(self, sigma):
