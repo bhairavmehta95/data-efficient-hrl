@@ -209,12 +209,16 @@ class Manager(object):
     def save(self, dir):
         torch.save(self.actor.state_dict(), '%s/ManagerActor.pth' % (dir))
         torch.save(self.critic.state_dict(), '%s/ManagerCritic.pth' % (dir))
+        torch.save(self.actor_target.state_dict(), '%s/ManagerActorTarget.pth' % (dir))
+        torch.save(self.critic_target.state_dict(), '%s/ManagerCriticTarget.pth' % (dir))
         torch.save(self.actor_optimizer.state_dict(), '%s/ManagerActorOptim.pth' % (dir))
         torch.save(self.critic_optimizer.state_dict(), '%s/ManagerCriticOptim.pth' % (dir))
 
     def load(self, dir):
         self.actor.load_state_dict(torch.load('%s/ManagerActor.pth' % (dir)))
         self.critic.load_state_dict(torch.load('%s/ManagerCritic.pth' % (dir)))
+        self.actor_target.load_state_dict(torch.load('%s/ManagerActorTarget.pth' % (dir)))
+        self.critic_target.load_state_dict(torch.load('%s/ManagerCriticTarget.pth' % (dir)))
         self.actor_optimizer.load_state_dict(torch.load('%s/ManagerActorOptim.pth' % (dir)))
         self.critic_optimizer.load_state_dict(torch.load('%s/ManagerCriticOptim.pth' % (dir)))
 
@@ -334,103 +338,15 @@ class Controller(object):
     def save(self, dir):
         torch.save(self.actor.state_dict(), '%s/ControllerActor.pth' % (dir))
         torch.save(self.critic.state_dict(), '%s/ControllerCritic.pth' % (dir))
+        torch.save(self.actor_target.state_dict(), '%s/ControllerActorTarget.pth' % (dir))
+        torch.save(self.critic_target.state_dict(), '%s/ControllerCriticTarget.pth' % (dir))
         torch.save(self.actor_optimizer.state_dict(), '%s/ControllerActorOptim.pth' % (dir))
         torch.save(self.critic_optimizer.state_dict(), '%s/ControllerCriticOptim.pth' % (dir))
 
     def load(self, dir):
         self.actor.load_state_dict(torch.load('%s/ControllerActor.pth' % (dir)))
         self.critic.load_state_dict(torch.load('%s/ControllerCritic.pth' % (dir)))
+        self.actor_target.load_state_dict(torch.load('%s/ControllerActorTarget.pth' % (dir)))
+        self.critic_target.load_state_dict(torch.load('%s/ControllerCriticTarget.pth' % (dir)))
         self.actor_optimizer.load_state_dict(torch.load('%s/ControllerActorOptim.pth' % (dir)))
         self.critic_optimizer.load_state_dict(torch.load('%s/ControllerCriticOptim.pth' % (dir)))
-
-
-class RepresentationNet(nn.Module):
-    def __init__(self, state_dim, action_dim, goal_dim):
-        super().__init__()
-        self.phi = PhiNetwork(action_dim, state_dim, goal_dim)
-        self.f = FNetwork(state_dim, goal_dim)
-        self.all_embed = nn.Parameter(torch.zeros(1024, goal_dim), requires_grad=False)
-        self.optimizer = nn.optim.Adam(set(self.phi.parameters()) + set(self.f.parameters()))
-
-    def forward_phi(self, a, state):
-        if isinstance(state, np.ndarray):
-            state = get_tensor(state)[None]
-        if isinstance(a, np.ndarray):
-            a = get_tensor(a)[None]
-        return self.f(state) + self.phi(state, a)
-
-    def forward_f(self, state):
-        import ipdb; ipdb.set_trace()
-        if isinstance(state, np.ndarray):
-            state = get_tensor(state)[None]
-        return self.f(state)
-
-    def get_low_level_loss(self, states, goals, next_states, low_actions, low_states):
-        tau = 2.0
-        fn = lambda z: tau * torch.sum(huber(z), -1)
-        log_parts = self.est_log_part(states[:, 0], low_actions)
-        attraction = -fn(self.forward_f(next_states) - goals)
-        baseline = fn(self.forward_f(next_states) - self.forward_phi(low_actions, states))
-        return attraction + baseline + log_parts
-
-    def est_log_part(self, states, actions):
-        tau = 2.0
-        fn = lambda z: tau * torch.sum(huber(z), -1)
-        embed1 = self.f(states).float()
-        action_embed = self.phi(actions, states=states)
-        prior_log_probs = torch.logsumexp(-fn((embed1 + action_embed)[:, None, :] - self.all_embed[None, :, :]),
-            axis=-1) - torch.log(self.all_embed.shape[0].float())
-
-        return prior_log_probs
-
-    def train(self, replay_buffer, iterations, batch_size=100):
-
-        avg_act_loss, avg_crit_loss = 0., 0.
-
-        for it in range(iterations):
-            # Sample replay buffer
-            x, y, sg, u, r, d, xseq, aseq = replay_buffer.sample(batch_size)
-            state = x
-            # action = u
-            next_state = y
-            # done = get_tensor(1 - d)
-            # reward = get_tensor(r)
-
-            # next_g = get_tensor(self.subgoal_transition(state, sg, next_state))
-
-            loss = self.loss(state, next_state, aseq, xseq)
-
-            self.optim.zero_grad()
-            loss.backward()
-            self.optim.step()
-        return avg_act_loss / iterations, avg_crit_loss / iterations
-
-    def loss(self, states, next_states, low_actions, low_states):
-        batch_size = states.shape[0]
-        d = low_states.shape[1]
-        # Sample indices into meta-transition to train on.
-        probs = 0.99 ** torch.range(d).float()
-        probs *= ([1.0] * (d - 1) + [1.0 / (1 - 0.99)])
-        probs /= torch.sum(probs)
-        index_dist = torch.distributions.categorical.Categorical(probs=probs, dtype=torch.int64)
-        indices = index_dist.sample(batch_size)
-        next_indices = torch.cat([torch.arange(batch_size, dtype=torch.int64)[:, None], (1 + indices[:, None]) % d], -1)
-        new_next_states = torch.gather(torch.cat([low_states, next_states[:, None, :]], 1))
-        next_states = torch.gather(new_next_states, next_indices, 1)
-
-        embed1 = self.f(states).float()
-        embed2 = self.f(next_states).float()
-        action_embed = self.phi(low_actions, states=states)
-
-        tau = 2.0
-        fn = lambda z: tau * torch.sum(huber(z), -1)
-
-        self.all_embed = torch.cat([self.all_embed[:batch_size], embed2], 0)
-
-        close = 1 * torch.mean(fn(embed1 + action_embed - embed2))
-        prior_log_probs = torch.logsumexp(-fn((embed1 + action_embed)[:, None, :] - self.all_embed[None, :, :]),
-                                          axis=-1) - torch.log(self.all_embed.shape[0].float())
-        far = torch.mean(torch.exp(-fn((embed1 + action_embed)[1:] - embed2[:-1]) - (prior_log_probs[1:]).detach()))
-        repr_log_probs = ((-fn(embed1 + action_embed - embed2) - prior_log_probs) / tau).detach()
-
-        return close + far, repr_log_probs, indices

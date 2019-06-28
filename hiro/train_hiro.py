@@ -48,7 +48,7 @@ def evaluate_policy(env, writer, manager_policy, controller_policy,
                 action = controller_policy.select_action(state, subgoal)
                 new_obs, reward, done, _ = env.step(action)
                 # See if the environment goal was achieved
-                if reward >= env.distance_threshold:
+                if reward >= -env.distance_threshold:
                     env_goals_achieved += 1
                     goals_achieved += 1
                     done = True
@@ -345,8 +345,14 @@ def run_hiro(args):
         episode_reward += controller_reward
 
         # Store low level transition
+        if args.inner_dones:
+            ctrl_done = done or timesteps_since_subgoal % \
+                         args.manager_propose_freq == 0
+        else:
+            ctrl_done = done
         controller_buffer.add(
-            (state, next_state, controller_goal, action, controller_reward, float(done), [], [])
+            (state, next_state, controller_goal, action,
+             controller_reward, float(ctrl_done), [], [])
         )
 
         # Update state parameters
@@ -363,7 +369,7 @@ def run_hiro(args):
         if timesteps_since_subgoal % args.manager_propose_freq == 0:
             # Finish, add transition
             manager_transition[1] = state
-            manager_transition[5] = float(True)
+            manager_transition[5] = float(done)
 
             manager_buffer.add(manager_transition)
 

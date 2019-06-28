@@ -4,7 +4,6 @@ from hiro.train_hiro import run_hiro
 from nopt.train_nopt import run_nopt
 import os
 
-
 parser = argparse.ArgumentParser()
 parser.add_argument("--seed", default=0, type=int)                      # Sets Gym, PyTorch and Numpy seeds
 parser.add_argument("--eval_freq", default=5e3, type=float)             # How often (time steps) we evaluate
@@ -20,9 +19,8 @@ parser.add_argument("--random_params", action="store_true")             # Run HP
 parser.add_argument("--hiro_only", action="store_true")                 # Use HIRO without representation learning.
 parser.add_argument("--no_correction", action="store_true")             # Disable the hiro correction.
 parser.add_argument("--reward_type", default="sparse")                  # Whether to use sparse or dense rewards.
-parser.add_argument("--ctrl_direct_rewards", action="store_true")       # Whether or not to give the controller direct
-                                                                        # rewards from the environment as well as
-                                                                        # hierarchical ones.
+parser.add_argument("--inner_dones", action="store_true")               # Whether or not to insert a `done' after each
+                                                                        # meta-action terminates.
 
 # hiro Specific Params
 parser.add_argument("--manager_propose_freq", default=10, type=int)     # #of env. steps at which we propose subgoals
