@@ -1,7 +1,6 @@
 import argparse
 import numpy as np
 from hiro.train_hiro import run_hiro
-from nopt.train_nopt import run_nopt
 import os
 
 
