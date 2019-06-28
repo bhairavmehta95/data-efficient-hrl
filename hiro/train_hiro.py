@@ -150,17 +150,12 @@ def run_hiro(args):
     goal_dim = goal.shape[0]
     action_dim = env.action_space.shape[0]
 
-    if args.ctrl_direct_rewards:
-        controller_g_dim = state_dim + goal_dim
-    else:
-        controller_g_dim = state_dim
-
     max_action = float(env.action_space.high[0])
 
     # Initialize policy, replay buffers
     controller_policy = hiro.Controller(
         state_dim=state_dim,
-        goal_dim=controller_g_dim,
+        goal_dim=state_dim,
         action_dim=action_dim,
         max_action=max_action,
         actor_lr=args.ctrl_act_lr,
@@ -307,10 +302,7 @@ def run_hiro(args):
             manager_transition = [state, None, goal, subgoal, 0, False, [state], []]
 
         # TODO: Scale action to environment
-        if args.ctrl_direct_rewards:
-            action = controller_policy.select_action(state, np.concatenate([subgoal, goal], -1))
-        else:
-            action = controller_policy.select_action(state, subgoal)
+        action = controller_policy.select_action(state, subgoal)
         action = ctrl_noise.perturb_action(action, max_action)
 
         # Perform action, get (nextst, r, d)
@@ -333,11 +325,7 @@ def run_hiro(args):
         controller_reward = calculate_controller_reward(state, subgoal, next_state, args.ctrl_rew_scale)
         subgoal = controller_policy.subgoal_transition(state, subgoal, next_state)
 
-        if args.ctrl_direct_rewards:
-            controller_reward = controller_reward + manager_reward
-            controller_goal = np.concatenate([subgoal, goal], -1)
-        else:
-            controller_goal = subgoal
+        controller_goal = subgoal
         # Is the episode over?
         if env_done:
             done = True
