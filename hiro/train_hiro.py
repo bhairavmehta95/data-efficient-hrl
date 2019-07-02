@@ -81,9 +81,15 @@ def evaluate_policy(env, writer, manager_policy, controller_policy,
         return avg_reward, avg_controller_rew, avg_step_count, avg_env_finish
 
 
-def hiro_controller_reward(z, subgoal, next_z, scale):
-    reward = -np.linalg.norm(z + subgoal - next_z, axis=-1) * scale
-    return reward
+def get_reward_function(dims):
+    def hiro_controller_reward(z, subgoal, next_z, scale):
+        z = z[:dims]
+        next_z = next_z[:dims]
+        subgoal
+        reward = -np.linalg.norm(z + subgoal - next_z, axis=-1) * scale
+        return reward
+
+    return hiro_controller_reward
 
 
 def run_hiro(args):
@@ -112,14 +118,23 @@ def run_hiro(args):
         min_action = np.array(
             [7.95019864e-01, - 5.56192570e-02, 3.32176206e-01, 0.00000000e+00, 0.00000000e+00, - 2.58566763e-02,
              - 2.46581777e-02, - 1.77669761e-02, - 1.13476014e-02, - 5.08970149e-04])
-        scale = max_action - min_action
+        man_scale = max_action - min_action
+        controller_goal_dim = man_scale.shape[0]
+        no_xy = False  # Can't just take out first dimensions; movement here is different than for ants.
     else:
+        # We'll be running on one of the various Ant envs
         env = EnvWithGoal(create_maze_env(args.env_name), args.env_name)
 
-        scale = np.array([10, 10, 0.5, 1, 1, 1] + [60]*3 + [40]*3
-                         + [60]*3 + [40]*3
-                         + [60]*3 + [40]*3
-                         + [60]*3 + [40]*3)
+        low = np.array((-10, -10, -0.5, -1, -1, -1, -1,
+                        -0.5, -0.3, -0.5, -0.3, -0.5, -0.3, -0.5, -0.3))
+        high = -low
+        man_scale = (high - low)/2
+        controller_goal_dim = man_scale.shape[0]
+        # scale = np.array([10, 10, 0.5, 1, 1, 1] + [60]*3 + [40]*3
+        #                  + [60]*3 + [40]*3
+        #                  + [60]*3 + [40]*3
+        #                  + [60]*3 + [40]*3)
+        no_xy = True
 
     obs = env.reset()
 
@@ -155,25 +170,26 @@ def run_hiro(args):
     # Initialize policy, replay buffers
     controller_policy = hiro.Controller(
         state_dim=state_dim,
-        goal_dim=state_dim,
+        goal_dim=controller_goal_dim,
         action_dim=action_dim,
         max_action=max_action,
         actor_lr=args.ctrl_act_lr,
         critic_lr=args.ctrl_crit_lr,
-        ctrl_rew_type=args.ctrl_rew_type
+        ctrl_rew_type=args.ctrl_rew_type,
+        no_xy=no_xy,
     )
 
     manager_policy = hiro.Manager(
         state_dim=state_dim,
         goal_dim=goal_dim,
-        action_dim=state_dim,
+        action_dim=controller_goal_dim,
         actor_lr=args.man_act_lr,
         critic_lr=args.man_crit_lr,
         candidate_goals=args.candidate_goals,
         correction=not args.no_correction,
-        scale=scale
+        scale=man_scale
     )
-    calculate_controller_reward = hiro_controller_reward
+    calculate_controller_reward = get_reward_function(controller_goal_dim)
 
     if args.noise_type == "ou":
         man_noise = utils.OUNoise(state_dim, sigma=args.man_noise_sigma)
@@ -231,6 +247,7 @@ def run_hiro(args):
                                                                         args.ctrl_batch_size, args.ctrl_discount,
                                                                         args.ctrl_tau)
 
+                print(ctrl_act_loss, ctrl_crit_loss)
                 writer.add_scalar('data/controller_actor_loss', ctrl_act_loss, total_timesteps)
                 writer.add_scalar('data/controller_critic_loss', ctrl_crit_loss, total_timesteps)
 
@@ -264,8 +281,10 @@ def run_hiro(args):
                     evaluations.append([avg_ep_rew, avg_controller_rew, avg_steps])
 
                     if args.save_models:
-                        controller_policy.save(file_name+'_controller', directory="./pytorch_models")
-                        manager_policy.save(file_name+'_manager', directory="./pytorch_models")
+                        controller_policy.save(file_name+'_controller',
+                                               directory="./pytorch_models")
+                        manager_policy.save(file_name+'_manager',
+                                            directory="./pytorch_models")
 
                     np.save("./results/%s" % file_name, evaluations)
 
@@ -362,7 +381,7 @@ def run_hiro(args):
             manager_buffer.add(manager_transition)
 
             subgoal = manager_policy.sample_goal(state, goal)
-            subgoal = man_noise.perturb_action(subgoal, max_action=200)
+            subgoal = man_noise.perturb_action(subgoal, max_action=man_scale)
 
             # Reset number of timesteps since we sampled a subgoal
             timesteps_since_subgoal = 0

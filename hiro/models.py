@@ -7,11 +7,13 @@ import torch.nn.init as init
 
 import hiro.utils
 
+
 def var(tensor):
     if torch.cuda.is_available():
         return Variable(tensor).cuda()
     else:
         return Variable(tensor)
+
 
 class Actor(nn.Module):
     def __init__(self, state_dim, goal_dim, action_dim, max_action):
@@ -81,12 +83,16 @@ class Critic(nn.Module):
         return x1
 
 class ControllerActor(nn.Module):
-    def __init__(self, state_dim, goal_dim, action_dim, max_action=1):
+    def __init__(self, state_dim, goal_dim, action_dim, scale=1):
         super(ControllerActor, self).__init__()
+        if scale is None:
+            scale = torch.ones(state_dim)
+        self.scale = nn.Parameter(torch.tensor(scale).float(),
+                                  requires_grad=False)
         self.actor = Actor(state_dim, goal_dim, action_dim, 1)
     
-    def forward(self, x, sg):
-        return self.actor(x, sg)
+    def forward(self, x, g):
+        return self.scale*self.actor(x, g)
 
 
 class ControllerCritic(nn.Module):
@@ -105,7 +111,7 @@ class ManagerActor(nn.Module):
     def __init__(self, state_dim, goal_dim, action_dim, scale=None):
         super(ManagerActor, self).__init__()
         if scale is None:
-            scale = torch.zeros(state_dim)
+            scale = torch.ones(state_dim)
         self.scale = nn.Parameter(torch.tensor(scale).float(), requires_grad=False)
         self.actor = Actor(state_dim, goal_dim, action_dim, 1)
     
