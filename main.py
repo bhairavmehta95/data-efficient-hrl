@@ -3,7 +3,6 @@ import numpy as np
 from hiro.train_hiro import run_hiro
 import os
 
-
 parser = argparse.ArgumentParser()
 parser.add_argument("--seed", default=0, type=int)                      # Sets Gym, PyTorch and Numpy seeds
 parser.add_argument("--eval_freq", default=5e3, type=float)             # How often (time steps) we evaluate
@@ -18,10 +17,9 @@ parser.add_argument("--rew_thresh", default=-0.0001, type=float)        # Thresh
 parser.add_argument("--random_params", action="store_true")             # Run HP search.
 parser.add_argument("--hiro_only", action="store_true")                 # Use HIRO without representation learning.
 parser.add_argument("--no_correction", action="store_true")             # Disable the hiro correction.
-parser.add_argument("--reward_type", default="sparse")                  # Whether to use sparse or dense rewards.
-parser.add_argument("--ctrl_direct_rewards", action="store_true")       # Whether or not to give the controller direct
-                                                                        # rewards from the environment as well as
-                                                                        # hierarchical ones.
+parser.add_argument("--reward_type", default="dense")                  # Whether to use sparse or dense rewards.
+parser.add_argument("--inner_dones", action="store_true")               # Whether or not to insert a `done' after each
+                                                                        # meta-action terminates.
 
 # hiro Specific Params
 parser.add_argument("--manager_propose_freq", default=10, type=int)     # #of env. steps at which we propose subgoals
@@ -42,7 +40,7 @@ parser.add_argument("--candidate_goals", default=10, type=int)          # # of c
 # Controller Parameters
 parser.add_argument("--ctrl_tau", default=0.005, type=float)            # Controller Target network update rate
 parser.add_argument("--ctrl_batch_size", default=128, type=int)         # Batch size for both actor and critic
-parser.add_argument("--ctrl_buffer_size", default=2e6, type=int)        # Replay Buffer size
+parser.add_argument("--ctrl_buffer_size", default=2e5, type=int)        # Replay Buffer size
 parser.add_argument("--ctrl_rew_scale", default=1.0, type=float)        # Reward Scaling
 parser.add_argument("--ctrl_rew_type", default="rig", type=str)         # What type of rew to use
 parser.add_argument("--ctrl_act_lr", default=1e-4, type=float)          # Actor Learning Rate
@@ -50,8 +48,8 @@ parser.add_argument("--ctrl_crit_lr", default=1e-3, type=float)         # Critic
 
 # Noise Parameters
 parser.add_argument("--noise_type", default="normal", type=str)         # Type of exploration noise
-parser.add_argument("--ctrl_noise_sigma", default=0.1, type=float)      # Std of Gaussian exploration noise
-parser.add_argument("--man_noise_sigma", default=0.25, type=float)      # Std of Gaussian exploration noise
+parser.add_argument("--ctrl_noise_sigma", default=1., type=float)      # Std of Gaussian exploration noise
+parser.add_argument("--man_noise_sigma", default=1., type=float)      # Std of Gaussian exploration noise
 
 # Run the algorithm
 args = parser.parse_args()
@@ -82,4 +80,5 @@ np.random.seed(args.seed)
 if args.hiro_only:
     run_hiro(args)
 else:
+    args.man_noise_sigma *= 5
     run_nopt(args)
